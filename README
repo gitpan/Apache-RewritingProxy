@@ -5,9 +5,12 @@ NAME
 SYNOPSIS
     # Configuration in httpd.conf
 
-    <Location /foo> SetHandler perl-script PerlHandler
-    Apache::RewritingProxy Options ExecCGI PerlSendHeader On
-    </Location>
+            <Location /foo>
+            SetHandler perl-script
+            PerlHandler Apache::RewritingProxy
+            Options ExecCGI
+            PerlSendHeader On
+            </Location>
 
     requests to /foo/http://domain.dom/ will return the resource
     located at http://domain.dom with all links pointing to
@@ -30,25 +33,35 @@ REQUIREMENTS
       HTML::TokeParser
       URI::URL
       Of course, mod_perl and Apache would also help greatly.
+      Mod_Perl needs to have lots of hooks enabled.  Preferably ALL_HOOKS
+      If not, the proxy will just give lots of server errors and not really
+      do that much.  In particular, the Apache::Table and Apache::Util
+      are necessary for the module to run properly. 
 
-TODO
-    Make cookies work
+TODO/BUGS
+    Make cookies work better.
 
-    Fix occasional query string munging for redirected requests
+    Eat fewer cookies in real life.
 
-    Add caching or incorporate some other caching mechanism
+    Make sites that rely on redirects and meta refreshes work
+    better.
 
-    Enable this module to at least print scripts that occur within
-    comments
+    Add caching or incorporate some other caching mechanism.
 
     Add an external script to enable this to be called as a cgi or a
-    mod_perl module (for testing)
+    mod_perl module (for testing without restarting web daemons)
 
 SEE ALSO
     mod_perl(3), Apache(3), LWP::UserAgent(3)
 
 AUTHOR
     Apache::RewritingProxy by Ken Hagan <ken.hagan@louisville.edu>
+
+            Debugging, suggestions, and helpful comments courtesy of
+            Mike Reiling <miker@softcoin.com>
+            Tim DiLauro <timmo@pembroke.mse.jhu.edu>
+            and a couple other random people foolish enough to download
+            and run this thing.
 
 COPYRIGHT
     The Apache::RewritingProxy module is free software; you can
