@@ -8,26 +8,39 @@ use vars '$proxiedCookieJar';
 use vars '$replayCookies';
 use vars '$serverCookies';
 use vars '$jar';
-use vars qw($VERSION @ISA);
+use vars '$textHandlerSub';
+use vars qw($VERSION @ISA @EXPORT);
 $|=1;
 
-$VERSION = '0.5';
+$VERSION = '0.7';
 
-use DynaLoader ();
+# use DynaLoader ();
+# @ISA = qw(DynaLoader Exporter);
 
-@ISA = qw(DynaLoader);
+use Exporter();
+@ISA = qw(Exporter);
+@EXPORT = qw(new handler fixLink fetchURL);
 
 # This is the directory in which cacheing will eventually take
 # place.  More importantly, a subdirectory of this named cookies
 # MUST exist and be writeable by the web server.  This is where users'
 # cookie jars are stored.
+
 $Apache::RewritingProxy::cacheRoot = '/web/httpd/RewritingProxy';
 
 
+sub new 
+  {
+  my $class = shift;
+  my $self = {};
+  bless $self,$class;
+  return $self;
+  }
 
 sub handler
   {
   my $r = shift;
+  $textHandlerSub = shift;
 
   # Find the URL we are to fetch...
   my $urlToFetch = substr($r->path_info,1);
@@ -95,7 +108,6 @@ sub fetchURL
   if (!$cookieKey)
     {
     $cookieKey = $r->get_remote_host();
-    $cookieKey =~ s/\.//g;
     my $cookieString = "RewritingProxyCookieJar=$cookieKey; expires=".
       ht_time(time+518400). "; path=/; domain=".$r->get_server_name;	
     $r->header_out('Set-Cookie'=>$cookieString);
@@ -111,12 +123,25 @@ sub fetchURL
   # Load the cookies into memory...
   $serverCookies->load() if (-e $jar);
 
+  # Let's take care of Referer also.
+  my $referer = $r->header_in('Referer');
+  my $script_name = $r->location;
+  $referer =~ s/(.*$script_name\/)//i;
+
+  # Let's carry the User Agent to the server also.
+  # TODO: We need to include the proxied via header here.
+  my $browser = $r->header_in('User-Agent');
+  $ua->agent($browser);
+
+  # We have to append the query string since it got munged by
+  # apache when this was first requested.
+  my $rurl = $url;
+  $rurl .= "?". $r->args if ($r->args && $url !~ /\?/);
+
   if ($r->method eq 'GET')
     {
-    # We have to append the query string since it got munged by
-    # apache when this was first requested.
-    $url .= "?". $r->args if ($r->args =~ /\=/);
-    $req = new HTTP::Request 'GET' => "$url";
+    $req = new HTTP::Request 'GET' => "$rurl";
+    $req->header('Referer'=>"$referer");
     $serverCookies->add_cookie_header($req);
     # This needs to be a simple request or else the redirects will 
     # not work very nicely.  LWP is too smart sometimes.
@@ -129,7 +154,8 @@ sub fetchURL
     # prepare the URL and pack in the encoded form data.
     use URI::URL;
     my %FORM;
-    $req = new HTTP::Request 'POST' => "$url";
+    $req = new HTTP::Request 'POST' => "$rurl";
+    $req->header('Referer'=>"$referer");
     $req->content_type('application/x-www-form-urlencoded');
     $serverCookies->add_cookie_header($req);
     # $req->content('$buffer');
@@ -153,26 +179,6 @@ sub fetchURL
     $curl->query_form(%FORM);
     $req->content($curl->equery);
     $res = $ua->simple_request($req);
-    }
-    
-  if ($res->code =~ /^3/)
-    {
-    # This means it was a server redirect.
-    # We should process the headers and insert 
-    # ourselves into the headers everywhere we need to.
-    my $textHeaders = $res->headers_as_string;
-
-
-    # We need the address of the current script.
-    my ($tmpUri,$junk) = split (/\/http/i, $r->uri);
-    my $script_home = $r->get_server_name .":".
-	$r->server->port . $tmpUri;
-
-    # Replace any redirect links with a link pointing through us.
-    $textHeaders =~ s#http:#http://$script_home/http:#i;
-    # Dump out the headers as though we had created them.
-    # Nothing like a little bit of http-plagiarism.
-    $r->send_cgi_header($textHeaders); 
     }
 
   # We need to store any cookies the server sent to us for future use.
@@ -210,10 +216,10 @@ sub fetchURL
     my $hash = shift;
      
 
-    if (!$expires )
-      {
-      $expires = ht_time(time+3600, '%Y-%m-%d %H:%M:%S',0);
-      }
+    # if (!$expires )
+      # {
+      # $expires = ht_time(time+3600, '%Y-%m-%d %H:%M:%S',0);
+      # }
     my $proxiedCookieJar = HTTP::Cookies->new(
 	File => "$jar",
 	ignore_discard=>1,
@@ -223,6 +229,35 @@ sub fetchURL
 	$domain,$port,$path_spec,$secure,$expires);
     $proxiedCookieJar->save();
     }
+    
+  if ($res->code =~ /^3/)
+    {
+    # This means it was a server redirect.
+    # We should process the headers and insert 
+    # ourselves into the headers everywhere we need to.
+    my $textHeaders = $res->headers_as_string;
+
+
+    # We need the address of the current script.
+    my ($tmpUri,$junk) = split (/\/http/i, $r->uri);
+    my $script_home = $r->get_server_name .":".
+	$r->server->port . $tmpUri;
+
+    # Replace any redirect links with a link pointing through us.
+    if ($textHeaders =~ /Location: http:/i)
+      {
+      $textHeaders =~ s#http:#http://$script_home/http:#i;
+      }
+    else
+      {
+      $textHeaders =~ s#Location: (.*)
+#Location: http://$script_home/$url$1#i;
+      }
+    # Dump out the headers as though we had created them.
+    # Nothing like a little bit of http-plagiarism.
+    $r->send_cgi_header($textHeaders); 
+    }
+
 
   # We only process html documents.  Maybe someday we will
   # work on other types, but there is no need right now since 
@@ -244,13 +279,21 @@ sub fetchURL
       # between script tags.
       if ($tolkens->[0] eq 'T')
 	{
-      	$outString .= $tolkens->[1];
+  	if ($textHandlerSub)
+	  {
+          $outString .= &{$textHandlerSub}($r,$tolkens->[1]);
+	  }
+	else
+	  {
+          $outString .= mainTextHandler($r,$tolkens->[1]);
+	  }
+      	# $outString .= $tolkens->[1];
 	}
       elsif ($tolkens->[0] eq 'C')
 	{
 	# HTML COmments. Wrap them back in their comment tags and
 	# send em on to the browser...
-	$outString .= "<!-- ".$tolkens->[1]."-->";
+	$outString .= "<!-- ".$tolkens->[1]." -->";
 	}
       elsif ($tolkens->[0] eq 'S' && ($tolkens->[1] eq 'a' ||
 	$tolkens->[1] eq 'A'))
@@ -259,8 +302,7 @@ sub fetchURL
         if ($tolkens->[2]{href})
           {
           my $newLink = &fixLink($r,$tolkens->[2]{href},$url);
-          # This silly little regex fixes &?+| in the URL for me.
-	  $tolkens->[2]{href} =~ s/(\+|\?|\||\&)/\\$1/g;
+	  $tolkens->[2]{href} = regexEscape($tolkens->[2]{href});
           $text =~ s($tolkens->[2]{href})($newLink)gsx;
           }
         $outString .= $text;
@@ -288,7 +330,7 @@ sub fetchURL
 	  {
 	  my ($junk,$tmpLink) = split (/=/, $tolkens->[2]{content});
 	  my $newLink = &fixLink($r,$tmpLink,$url);
-	  $tmpLink =~ s/(\+|\?|\||\&)/\\$1/g;
+	  $tmpLink = regexEscape($tmpLink);
 	  $text =~ s#$tmpLink#$newLink#;
 	  }
 	$outString .= $text;
@@ -303,14 +345,14 @@ sub fetchURL
 	  }
 	$outString .= $text;
 	}
-      elsif ($tolkens->[1] =~ /^(frame|img|input)$/i && $tolkens->[0] eq 'S')
+      elsif ($tolkens->[1] =~ /^(frame|img|input)$/i 
+		&& $tolkens->[0] eq 'S')
   	{
 	$text = $tolkens->[4];
         if ($tolkens->[2]{src} && $tolkens->[0] eq 'S')
 	  {
 	  my $newLink = &fixLink($r,$tolkens->[2]{src},$url);
-          # This silly little regex fixes &?+| in the URL for me.
-	  $tolkens->[2]{src} =~ s/(\+|\?|\||\&)/\\$1/g;
+	  $tolkens->[2]{src} = regexEscape($tolkens->[2]{src});
 	  $text =~ s#$tolkens->[2]{src}#$newLink#;
 	  }
 	$outString .= $text;
@@ -321,7 +363,8 @@ sub fetchURL
         if ($tolkens->[2]{action})
 	  {
 	  my $newLink = &fixLink($r,$tolkens->[2]{action},$url);
-	  $text =~ s#$tolkens->[2]{action}#$newLink#;
+          my $action = regexEscape($tolkens->[2]{action});
+	  $text =~ s#$action#$newLink#;
 	  }
 	$outString .= $text;
 	}
@@ -335,6 +378,18 @@ sub fetchURL
 	  }
 	$outString .= $text;
 	}
+      elsif ($tolkens->[1] =~ /^script$/i 
+		&& $tolkens->[0] eq 'S')
+  	{
+	$text = $tolkens->[4];
+        if ($tolkens->[2]{src} && $tolkens->[0] eq 'S')
+	  {
+	  my $newLink = &fixLink($r,$tolkens->[2]{src},$url);
+	  $tolkens->[2]{src} = regexEscape($tolkens->[2]{src});
+	  $text =~ s#$tolkens->[2]{src}#$newLink#;
+	  }
+	$outString .= $text;
+	}
       else
 	{
 	  $outString .= $tolkens->[4];
@@ -342,7 +397,7 @@ sub fetchURL
       }
 
     $r->content_type($res->content_type);
-    print $outString;
+    print "\n" . $outString;
     return(OK);
     }
   else
@@ -456,6 +511,30 @@ sub fixLink
     }
   } #end of sub fixLink
 
+# This is the function that one would replace if one were to 
+# want to change the way this program handled text.
+sub mainTextHandler
+  {
+  my $r = shift;
+  my $string = shift;
+  return($string);
+  }
+
+# We just escape the necessary crap in the URL we are given so that
+# it can then be compared in a regex and all will be happy
+sub regexEscape
+  {
+  my $url = shift;
+  # This silly little regex fixes (*&?+|) in the URL for me.
+  # withhout this regex, any of these characters in a URL will
+  # cause a server error (unless they resolve into something
+  # sensible to regex, in which case the server does something
+  # magical and unpredictable with the URL)
+  $url =~ s/(\-|\[|\]|\(|\)|\*|\+|\?|\||\&)/\\$1/g;
+  return $url;
+  }
+
+
 1;
 
 __END__
@@ -485,6 +564,9 @@ on the client's part.  The client is simply pointed to a URL using this
 module and it fetches the resource and rewrites all links to continue
 using this proxy.  
 
+RewritingProxy can also now be subclassed to allow users to write different
+handlers for the text. See the eg for examples of this in action.
+
 =head1 INSTALLATION
 
 
@@ -503,7 +585,7 @@ You need the following modules installed for this module to work:
   Mod_Perl needs to have lots of hooks enabled.  Preferably ALL_HOOKS
   If not, the proxy will just give lots of server errors and not really
   do that much.  In particular, the Apache::Table and Apache::Util
-  are necessary for the module to run properly. 
+  seem to be necessary for the module to run properly. 
 
 
 =head1 TODO/BUGS
@@ -512,12 +594,8 @@ Make cookies work better.
 
 Eat fewer cookies in real life.
 
-Make sites that rely on redirects and meta refreshes work better.
-
 Add caching or incorporate some other caching mechanism.
 
-Add an external script to enable this to be called as a cgi or a mod_perl 
-module (for testing without restarting web daemons)
 
 =head1 SEE ALSO
 

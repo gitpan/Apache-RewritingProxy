@@ -22,6 +22,10 @@ DESCRIPTION
     pointed to a URL using this module and it fetches the resource
     and rewrites all links to continue using this proxy.
 
+    RewritingProxy can also now be subclassed to allow users to
+    write different handlers for the text. See the eg for examples
+    of this in action.
+
 INSTALLATION
     perl Makefile.PL; make; make install;
 
@@ -36,20 +40,14 @@ REQUIREMENTS
       Mod_Perl needs to have lots of hooks enabled.  Preferably ALL_HOOKS
       If not, the proxy will just give lots of server errors and not really
       do that much.  In particular, the Apache::Table and Apache::Util
-      are necessary for the module to run properly. 
+      seem to be necessary for the module to run properly. 
 
 TODO/BUGS
     Make cookies work better.
 
     Eat fewer cookies in real life.
 
-    Make sites that rely on redirects and meta refreshes work
-    better.
-
     Add caching or incorporate some other caching mechanism.
-
-    Add an external script to enable this to be called as a cgi or a
-    mod_perl module (for testing without restarting web daemons)
 
 SEE ALSO
     mod_perl(3), Apache(3), LWP::UserAgent(3)
@@ -59,8 +57,9 @@ AUTHOR
 
             Debugging, suggestions, and helpful comments courtesy of
             Mike Reiling <miker@softcoin.com>
-            Tim DiLauro <timmo@pembroke.mse.jhu.edu>
-            and a couple other random people foolish enough to download
+            Steve Baker <steveb@web.co.nz>
+            Tim DiLauro <timmo@jhu.edu>
+            and a few other people foolish enough to download
             and run this thing.
 
 COPYRIGHT
